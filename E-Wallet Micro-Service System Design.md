@@ -28,19 +28,19 @@ Nine bounded services — each owns its database, deploys independently, and com
 
 | Service | Responsibility | Language | Database | Key Kafka topics |
 | --- | --- | --- | --- | --- |
-| **Identity** | Registration, login, JWT issuance, MFA, OAuth2 clients, session revocation | Go | PostgreSQL | `auth.events` |
+| **Identity** | Registration, login, JWT issuance, MFA, OAuth2 clients, session revocation | PHP (Laravel) | PostgreSQL | `auth.events` |
 | **Wallet** | Balance management, holds/locks, spending limits, multi-currency accounts | Go | PostgreSQL | `wallet.events` |
 | **Payment** | Card top-ups, P2P transfers, QR payments, merchant payouts, refunds | Go | PostgreSQL | `payment.events` |
 | **Ledger** | Double-entry accounting, debit/credit records, reconciliation | Go | PostgreSQL | `ledger.entries` |
 | **Fee Engine** | Fee rule evaluation, FX rate lookup, fee schedule versioning | Go | Redis | `fee.computed` |
 | **KYC / AML** | Identity verification, risk scoring, sanctions screening, document storage | Python | PostgreSQL | `kyc.events` |
 | **Notification** | Multi-channel dispatch (push, SMS, email), retry queue, preference management | Node.js | PostgreSQL + Redis | `notification.triggers` |
-| **Audit** | Immutable event log, regulatory export, tamper detection | Go | ClickHouse | `audit.log` |
+| **Audit** | Immutable event log, regulatory export, tamper detection | Python | ClickHouse | `audit.log` |
 | **Reporting** | OLAP queries, compliance reports, merchant dashboards | Python | ClickHouse | — (reads Audit) |
 
 ## File Structure
 
-All services follow the same layout. The mono-repo root holds shared infrastructure config; each service is a self-contained directory.
+The mono-repo root holds shared infrastructure config; each service is a self-contained directory. Go services share one layout (shown under `wallet/`); Identity (Laravel), the Python services (KYC, Audit, Reporting; FastAPI) and Notification (Express) use their framework's idiomatic layout with the same layering intent.
 
 ```
 e-wallet/
@@ -56,44 +56,77 @@ e-wallet/
 │       ├── namespace.yaml
 │       └── istio-mesh.yaml
 │
-├── libs/                         # Shared Go/Node packages (not services)
+├── libs/                         # Shared Go/Node packages (not services); Identity (Laravel) and the Python services have their own equivalents
 │   ├── auth/                     # JWT validation middleware
 │   ├── events/                   # Kafka producer/consumer wrappers
 │   ├── observability/            # OTEL tracer, logger, metrics
 │   └── pagination/               # Cursor pagination helpers
 │
 ├── services/
-│   ├── identity/
+│   ├── identity/                 # PHP: Laravel; standard Laravel layout instead of cmd/ + internal/
+│   │   ├── app/
+│   │   │   ├── Models/           # Eloquent models (persistence + entities)
+│   │   │   │   ├── User.php
+│   │   │   │   └── Session.php
+│   │   │   ├── Services/         # Business logic (no HTTP types)
+│   │   │   │   ├── AuthService.php
+│   │   │   │   └── MfaService.php
+│   │   │   ├── Http/
+│   │   │   │   ├── Controllers/  # REST handlers (thin: validate, call a service, respond)
+│   │   │   │   │   ├── AuthController.php
+│   │   │   │   │   └── UserController.php
+│   │   │   │   ├── Requests/     # Form request validation
+│   │   │   │   └── Middleware/
+│   │   │   ├── Events/           # Domain events (UserRegistered, SessionRevoked, ...)
+│   │   │   ├── Listeners/        # Publish domain events to auth.events
+│   │   │   ├── Kafka/            # Producer + consumer wrappers (php-rdkafka)
+│   │   │   │   ├── Producer.php
+│   │   │   │   └── Consumer.php
+│   │   │   ├── Console/
+│   │   │   │   └── Commands/     # Long-running Kafka consumer workers (kafka:consume)
+│   │   │   └── Providers/
+│   │   ├── config/
+│   │   ├── database/
+│   │   │   ├── migrations/       # Laravel migrations
+│   │   │   │   ├── 0001_create_users_table.php
+│   │   │   │   └── 0002_create_sessions_table.php
+│   │   │   └── factories/
+│   │   ├── routes/
+│   │   │   └── api.php
+│   │   ├── tests/
+│   │   ├── Dockerfile
+│   │   ├── composer.json
+│   │   └── composer.lock
+│   │
+│   ├── wallet/                   # Go: reference layout for all Go services
 │   │   ├── cmd/
 │   │   │   └── server/
 │   │   │       └── main.go
 │   │   ├── internal/
 │   │   │   ├── domain/           # Entities, value objects, domain errors
-│   │   │   │   ├── user.go
-│   │   │   │   └── session.go
+│   │   │   │   ├── wallet.go
+│   │   │   │   └── hold.go
 │   │   │   ├── service/          # Business logic (no HTTP, no DB)
-│   │   │   │   ├── auth_service.go
-│   │   │   │   └── mfa_service.go
+│   │   │   │   ├── wallet_service.go
+│   │   │   │   └── limit_service.go
 │   │   │   ├── handler/          # HTTP handlers (REST)
-│   │   │   │   ├── auth_handler.go
-│   │   │   │   └── user_handler.go
+│   │   │   │   └── wallet_handler.go
 │   │   │   ├── store/            # DB queries (sqlc-generated + wrappers)
 │   │   │   │   ├── queries/
-│   │   │   │   └── user_store.go
+│   │   │   │   └── wallet_store.go
 │   │   │   ├── events/           # Kafka producers and consumers
 │   │   │   │   ├── producer.go
 │   │   │   │   └── consumer.go
 │   │   │   └── config/
 │   │   │       └── config.go
 │   │   ├── migrations/           # SQL migration files (goose)
-│   │   │   ├── 001_create_users.sql
-│   │   │   └── 002_create_sessions.sql
+│   │   │   ├── 001_create_wallets.sql
+│   │   │   └── 002_create_holds.sql
 │   │   ├── Dockerfile
 │   │   ├── go.mod
 │   │   └── go.sum
 │   │
-│   ├── wallet/                   # Same layout as identity/
-│   ├── payment/
+│   ├── payment/                  # Same Go layout as wallet/
 │   ├── ledger/
 │   ├── fee-engine/
 │   ├── kyc/                      # Python: FastAPI; src/ instead of internal/
@@ -115,8 +148,8 @@ e-wallet/
 │   │   │   └── workers/          # Bull queue workers
 │   │   ├── package.json
 │   │   └── Dockerfile
-│   ├── audit/
-│   └── reporting/
+│   ├── audit/                    # Python: FastAPI; same layout as kyc/
+│   └── reporting/                # Python: FastAPI; same layout as kyc/
 │
 ├── gateway/                      # API Gateway (Envoy config + custom plugins)
 │   ├── envoy.yaml
@@ -133,10 +166,21 @@ e-wallet/
 
 **Convention rules**
 
+Go services:
+
 - `domain/` has zero infrastructure imports — testable in isolation
 - `service/` depends only on `domain/` and `store/` interfaces — no HTTP types
 - `handler/` and `events/` are the only layers that touch transport
-- Each service exports a health endpoint at `GET /health` and metrics at `GET /metrics`
+
+Identity (Laravel):
+
+- Eloquent models are Active Record, so the "no infrastructure imports in `domain/`" rule does not apply; business logic lives in `Services/` and is tested against a real test database
+- `Services/` takes plain values or DTOs — no `Request`/`Response` types
+- Controllers stay thin (validate, call a service, respond); controllers, listeners and `Console/Commands/` are the only layers that touch transport
+
+All services:
+
+- Each service exports a health endpoint at `GET /health` and metrics at `GET /metrics` (Identity maps `/health` over Laravel's default `/up` route)
 
 ## Data Models
 
@@ -322,7 +366,7 @@ All endpoints require `Authorization: Bearer <JWT>`. The API Gateway validates t
 ```
 PR opened
   → unit tests (per service)
-  → lint + vet
+  → lint + static analysis (go vet; ruff + mypy for Python; Pint + PHPStan for Identity)
   → integration tests (docker-compose)
   → SAST (Semgrep)
   → SCA (Trivy)
@@ -362,6 +406,8 @@ Merge to main
 - **Choreography saga vs. orchestration saga** — choreography keeps services decoupled and avoids a central orchestrator SPOF, at the cost of harder observability. Mitigated by correlating all events on `transaction_id` in the Audit service.
 - **ClickHouse for Audit and Reporting** — write-optimized columnar store handles high-velocity append-only event streams and complex aggregation queries cheaply. Trade-off: not suitable for point updates; fine here because audit events are immutable by design.
 - **Separate Fee Engine as a service** — fee rules change frequently and independently of transaction flow. Extracting it avoids redeploying Payment for every pricing change. Trade-off: one extra network hop per transaction; acceptable given the sub-millisecond Redis lookup.
-- **Go for core financial services** — deterministic GC pause, low memory footprint, and strong concurrency primitives make it the right fit for latency-sensitive services. Python used only where ML libraries or rapid iteration matter (KYC, Reporting).
+- **Go for core financial services** — deterministic GC pause, low memory footprint, and strong concurrency primitives make it the right fit for latency-sensitive services that move money (Wallet, Payment, Ledger, Fee Engine). Python is used where ML libraries, model deployment or rapid iteration matter (KYC, Audit, Reporting).
+- **Python for Audit** — Audit's detection models (e.g. anomaly scoring over the event stream) deploy in the same Python ML stack as KYC, with no separate model-serving hop or cross-language export step. Audit consumes events asynchronously and is off the request path, so Go's latency advantage matters little here. Trade-offs: lower raw ingest throughput per instance than Go, mitigated by `confluent-kafka` (librdkafka-backed), batched ClickHouse inserts, and scaling consumers horizontally up to the topic's partition count; and the Go shared libs (`libs/events`, `libs/observability`) cannot be reused, so Audit must follow the documented event schemas rather than shared code.
+- **Laravel for Identity** — registration, login, MFA and OAuth2 clients are CRUD-heavy, security-sensitive flows that Laravel's ecosystem covers with little custom code (Passport for OAuth2 clients and RS256 JWT issuance, plus built-in password hashing, validation, rate limiting and queues), so it is cheaper to build and maintain than a hand-rolled Go service. Identity is off the money-movement hot path: the gateway validates JWT signatures itself, so Identity only serves register/login/refresh traffic and the transfer P99 target is unaffected. Trade-offs: a fourth runtime (PHP) to patch and scan alongside Go, Python and Node; Kafka needs the `php-rdkafka` extension in the image, and consumers run as long-lived `artisan` workers in their own Deployment rather than inside the web process; the Go shared libs (`libs/events`, `libs/observability`) cannot be reused, so event payloads for `auth.events` must follow the documented schema rather than shared code.
 - **No distributed transactions (2PC)** — 2PC is a scalability ceiling and a reliability hazard. Saga + idempotency + compensating events achieve eventual consistency without locking across services.
 - **Soft foreign keys across service boundaries** — no DB-level FK across service databases; referential integrity enforced by event consumers. Trade-off: a service must handle "entity not found" gracefully for events that arrive before the referenced entity is replicated.
