@@ -1,0 +1,68 @@
+# API gateway configuration. Unknown keys are rejected, so typos fail at startup.
+# Durations use Go syntax (500ms, 5s, 1m). Run with: server -config gateway.yaml
+
+server:
+  listen: ":8080"
+  read_header_timeout: 5s
+  shutdown_timeout: 15s
+  max_body_bytes: 1048576
+  # Set to the header (for example X-Forwarded-For) written by exactly one trusted proxy in
+  # front of the gateway so rate limits use the real client address. Leave empty when clients
+  # connect directly: the header is client-controlled and would be trivially spoofable.
+  client_ip_header: ""
+
+# Internal libs/auth gRPC service used to verify access tokens on routes with `auth: true`.
+auth:
+  addr: 127.0.0.1:9090
+  timeout: 2s
+
+# Rate limit counters. Redis is used while it is reachable; if it is down the gateway falls back
+# to an in-memory limiter (per gateway instance) and switches back once Redis recovers.
+# Remove this block to use the in-memory limiter only.
+redis:
+  addr: 127.0.0.1:6379
+  db: 0
+  tls: false
+  password_file: ""        # path to a file holding the password (no secrets in this file)
+  timeout: 100ms
+  key_prefix: "gateway:ratelimit:"
+  retry_interval: 5s       # while Redis is down, probe it at most this often
+
+upstreams:
+  identity:
+    url: http://127.0.0.1:8000
+    path_prefix: /api      # prepended to every proxied path: /v1/auth/login -> /api/v1/auth/login
+    timeout: 10s
+
+# A path ending in "/" matches everything beneath it; any other path matches exactly.
+# rate_limit is per client address and per route, counted in fixed windows.
+routes:
+  - name: auth-register
+    methods: [POST]
+    path: /v1/auth/register
+    upstream: identity
+    rate_limit: {requests: 10, window: 1m}
+
+  - name: auth-login
+    methods: [POST]
+    path: /v1/auth/login
+    upstream: identity
+    rate_limit: {requests: 10, window: 1m}
+
+  - name: auth-refresh
+    methods: [POST]
+    path: /v1/auth/refresh
+    upstream: identity
+    rate_limit: {requests: 10, window: 1m}
+
+  - name: auth-logout
+    methods: [POST]
+    path: /v1/auth/logout
+    upstream: identity
+    auth: true
+
+  - name: auth-me
+    methods: [GET]
+    path: /v1/auth/me
+    upstream: identity
+    auth: true
