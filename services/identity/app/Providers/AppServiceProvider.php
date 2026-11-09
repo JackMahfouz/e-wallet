@@ -2,8 +2,11 @@
 
 namespace App\Providers;
 
+use App\Grpc\AuthClient;
 use App\Models\User;
-use App\Services\JwtService;
+use App\Services\GrpcTokenService;
+use App\Services\TokenService;
+use Grpc\ChannelCredentials;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\ServiceProvider;
@@ -15,7 +18,11 @@ class AppServiceProvider extends ServiceProvider
      */
     public function register(): void
     {
-        //
+        // The auth service listens on an internal port only; the mesh sidecar provides mTLS.
+        $this->app->singleton(TokenService::class, fn () => new GrpcTokenService(
+            new AuthClient(config('jwt.auth_addr'), ['credentials' => ChannelCredentials::createInsecure()]),
+            config('jwt.auth_timeout'),
+        ));
     }
 
     /**
@@ -24,9 +31,9 @@ class AppServiceProvider extends ServiceProvider
     public function boot(): void
     {
         Auth::viaRequest('jwt', function (Request $request): ?User {
-            $claims = $this->app->make(JwtService::class)->decode((string) $request->bearerToken());
+            $subject = $this->app->make(TokenService::class)->verify((string) $request->bearerToken());
 
-            return $claims === null ? null : User::find($claims['sub'] ?? null);
+            return $subject === null ? null : User::find($subject);
         });
     }
 }

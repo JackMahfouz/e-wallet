@@ -26,11 +26,11 @@
         <env name="DB_CONNECTION" value="sqlite"/>
         <env name="DB_DATABASE" value=":memory:"/>
         <env name="DB_URL" value=""/>
-        <env name="JWT_SECRET" value="testing-secret-not-for-production"/>
-        <env name="JWT_TTL" value="15"/>
         <env name="JWT_REFRESH_TTL" value="15"/>
+        <env name="LOGIN_BACKOFF_DECAY_SECONDS" value="60"/>
         <env name="MAIL_MAILER" value="array"/>
         <env name="QUEUE_CONNECTION" value="sync"/>
+        <env name="REDIS_PREFIX" value="identity-testing-"/>
         <env name="SESSION_DRIVER" value="array"/>
         <env name="PULSE_ENABLED" value="false"/>
         <env name="TELESCOPE_ENABLED" value="false"/>

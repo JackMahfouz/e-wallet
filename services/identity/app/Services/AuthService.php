@@ -13,7 +13,7 @@ use Illuminate\Support\Str;
  */
 class AuthService
 {
-    public function __construct(private JwtService $jwtService) {}
+    public function __construct(private TokenService $tokenService) {}
 
     /**
      * Create a user and sign them in.
@@ -82,8 +82,8 @@ class AuthService
      */
     private function issueTokens(User $user): array
     {
-        $issuedAt = now()->timestamp;
-        $accessTtlSeconds = config('jwt.ttl') * 60;
+        // Ask the auth service first, so a failed call leaves no orphaned refresh token behind.
+        $accessToken = $this->tokenService->issue((string) $user->id);
         $refreshToken = Str::random(64);
 
         $user->refreshTokens()->create([
@@ -92,15 +92,10 @@ class AuthService
         ]);
 
         return [
-            'access_token' => $this->jwtService->encode([
-                'iss' => config('app.url'),
-                'sub' => (string) $user->id,
-                'iat' => $issuedAt,
-                'exp' => $issuedAt + $accessTtlSeconds,
-            ]),
+            'access_token' => $accessToken['access_token'],
             'refresh_token' => $refreshToken,
             'token_type' => 'Bearer',
-            'expires_in' => $accessTtlSeconds,
+            'expires_in' => $accessToken['expires_in'],
         ];
     }
 

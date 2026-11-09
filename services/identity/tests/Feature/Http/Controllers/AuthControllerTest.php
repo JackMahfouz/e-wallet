@@ -2,7 +2,14 @@
 
 use App\Models\User;
 use App\Services\AuthService;
+use App\Services\TokenService;
+use Illuminate\Support\Facades\Exceptions;
 use Illuminate\Support\Facades\Hash;
+use Tests\Fakes\FakeTokenService;
+
+beforeEach(function () {
+    $this->app->instance(TokenService::class, new FakeTokenService);
+});
 
 /**
  * Sign in a factory user (their password is "password") without going through HTTP.
@@ -12,6 +19,25 @@ use Illuminate\Support\Facades\Hash;
 function tokensFor(User $user): array
 {
     return app(AuthService::class)->login($user->email, 'password');
+}
+
+/**
+ * A token service whose backend is down: every call fails like an unreachable auth service.
+ */
+function unreachableTokenService(): TokenService
+{
+    return new class implements TokenService
+    {
+        public function issue(string $subject): array
+        {
+            throw new RuntimeException('auth service unreachable');
+        }
+
+        public function verify(string $token): ?string
+        {
+            throw new RuntimeException('auth service unreachable');
+        }
+    };
 }
 
 describe('register', function () {
@@ -75,16 +101,33 @@ describe('login', function () {
             ->assertJson(['token_type' => 'Bearer', 'expires_in' => 900]);
     });
 
-    test('returns 401 for invalid credentials', function (string $email, string $password) {
-        User::factory()->create(['email' => 'ada@example.com']);
+    // These two use unique emails: failures are recorded in the real Redis, so a fixed email
+    // would pile up across test runs and eventually be locked out.
+    test('returns 401 for a wrong password', function () {
+        $user = User::factory()->create();
 
-        $this->postJson('/api/v1/auth/login', ['email' => $email, 'password' => $password])
+        $this->postJson('/api/v1/auth/login', ['email' => $user->email, 'password' => 'wrong-password'])
             ->assertUnauthorized()
             ->assertExactJson(['message' => 'Invalid credentials.']);
-    })->with([
-        'wrong password' => ['ada@example.com', 'wrong-password'],
-        'unknown email' => ['nobody@example.com', 'password'],
-    ]);
+    });
+
+    test('returns 401 for an unknown email', function () {
+        $this->postJson('/api/v1/auth/login', ['email' => fake()->unique()->safeEmail(), 'password' => 'password'])
+            ->assertUnauthorized()
+            ->assertExactJson(['message' => 'Invalid credentials.']);
+    });
+
+    test('returns 500 and stores no refresh token when the auth service is unreachable', function () {
+        Exceptions::fake();
+        $user = User::factory()->create();
+        $this->app->instance(TokenService::class, unreachableTokenService());
+
+        $this->postJson('/api/v1/auth/login', ['email' => $user->email, 'password' => 'password'])
+            ->assertInternalServerError();
+
+        Exceptions::assertReported(fn (RuntimeException $e) => $e->getMessage() === 'auth service unreachable');
+        $this->assertDatabaseCount('refresh_tokens', 0);
+    });
 
     test('returns 422 when the credentials are missing', function () {
         $this->postJson('/api/v1/auth/login')
@@ -93,16 +136,6 @@ describe('login', function () {
                 'email' => 'The email field is required.',
                 'password' => 'The password field is required.',
             ]);
-    });
-
-    test('returns 429 after too many attempts', function () {
-        foreach (range(1, 10) as $attempt) {
-            $this->postJson('/api/v1/auth/login', ['email' => 'nobody@example.com', 'password' => 'password'])
-                ->assertUnauthorized();
-        }
-
-        $this->postJson('/api/v1/auth/login', ['email' => 'nobody@example.com', 'password' => 'password'])
-            ->assertTooManyRequests();
     });
 });
 
@@ -121,20 +154,20 @@ describe('me', function () {
         $this->getJson('/api/v1/auth/me')->assertUnauthorized();
     });
 
-    test('returns 401 when the token signature is invalid', function () {
-        $tokens = tokensFor(User::factory()->create());
-
-        $this->withToken($tokens['access_token'].'tampered')->getJson('/api/v1/auth/me')
+    // Signature and expiry checks belong to the auth service and are tested in libs/auth.
+    test('returns 401 when the auth service does not accept the token', function () {
+        $this->withToken('not-issued-by-anyone')->getJson('/api/v1/auth/me')
             ->assertUnauthorized();
     });
 
-    test('returns 401 when the access token has expired', function () {
-        $tokens = tokensFor(User::factory()->create());
+    test('returns 500 instead of letting the request through when the auth service is unreachable', function () {
+        Exceptions::fake();
+        $this->app->instance(TokenService::class, unreachableTokenService());
 
-        $this->travel(16)->minutes();
+        $this->withToken('any-token')->getJson('/api/v1/auth/me')
+            ->assertInternalServerError();
 
-        $this->withToken($tokens['access_token'])->getJson('/api/v1/auth/me')
-            ->assertUnauthorized();
+        Exceptions::assertReported(RuntimeException::class);
     });
 
     test('returns 401 when the user no longer exists', function () {

@@ -4,30 +4,30 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | JWT Signing Secret
+    | Refresh Token Lifetime
     |--------------------------------------------------------------------------
     |
-    | Shared secret used to sign and verify HS256 access tokens. Every service
-    | that verifies tokens must use the same value. Generate one with
-    | `openssl rand -base64 48`.
+    | In minutes. Refresh tokens are stored server side, rotated on every use,
+    | and expire after this long. Access tokens are issued by the auth service
+    | (libs/auth), which owns their lifetime through its own AUTH_ACCESS_TTL.
     |
     */
 
-    'secret' => env('JWT_SECRET'),
+    'refresh_ttl' => (int) env('JWT_REFRESH_TTL', 15),
 
     /*
     |--------------------------------------------------------------------------
-    | Token Lifetimes
+    | Auth Service (gRPC, internal only)
     |--------------------------------------------------------------------------
     |
-    | Both values are in minutes. The access token is a stateless JWT. The
-    | refresh token is stored server side, rotated on every use, and expires
-    | after "refresh_ttl" minutes.
+    | Address of the libs/auth server that issues and verifies access tokens,
+    | and the deadline in seconds for each call. It must be reachable only
+    | from inside the cluster.
     |
     */
 
-    'ttl' => (int) env('JWT_TTL', 15),
+    'auth_addr' => env('AUTH_RPC_ADDR', '127.0.0.1:9090'),
 
-    'refresh_ttl' => (int) env('JWT_REFRESH_TTL', 15),
+    'auth_timeout' => (float) env('AUTH_RPC_TIMEOUT', 2),
 
 ];

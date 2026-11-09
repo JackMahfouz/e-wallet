@@ -119,4 +119,24 @@ return [
 
     'password_timeout' => env('AUTH_PASSWORD_TIMEOUT', 10800),
 
+    /*
+    |--------------------------------------------------------------------------
+    | Login Backoff
+    |--------------------------------------------------------------------------
+    |
+    | Failed logins are counted in Redis per email and IP. After "free_attempts"
+    | failures the lockout starts at "base_seconds" and doubles on every further
+    | failure, up to "max_seconds". A successful login clears the count, and it
+    | is forgotten after "decay_seconds" without a new failure (keep this larger
+    | than "max_seconds").
+    |
+    */
+
+    'login_backoff' => [
+        'free_attempts' => (int) env('LOGIN_BACKOFF_FREE_ATTEMPTS', 5),
+        'base_seconds' => (int) env('LOGIN_BACKOFF_BASE_SECONDS', 1),
+        'max_seconds' => (int) env('LOGIN_BACKOFF_MAX_SECONDS', 900),
+        'decay_seconds' => (int) env('LOGIN_BACKOFF_DECAY_SECONDS', 3600),
+    ],
+
 ];
