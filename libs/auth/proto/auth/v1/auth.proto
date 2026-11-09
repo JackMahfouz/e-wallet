@@ -1,0 +1,42 @@
+syntax = "proto3";
+
+package auth.v1;
+
+option go_package = "github.com/JackMahfouz/e-wallet/libs/auth/gen/auth/v1;authv1";
+option php_namespace = "App\\Grpc\\Auth\\V1";
+option php_metadata_namespace = "App\\Grpc\\GPBMetadata";
+
+// Auth issues and verifies access tokens (RS256 JWTs).
+//
+// INTERNAL ONLY: this service must never be routed through the API gateway.
+// Reach it over the cluster network (mTLS is provided by the mesh).
+service Auth {
+  // Issue signs an access token for the given subject.
+  // Returns INVALID_ARGUMENT when the subject is empty.
+  rpc Issue(IssueRequest) returns (IssueResponse);
+
+  // Verify checks a token's signature, issuer and expiry.
+  // Returns UNAUTHENTICATED when the token is invalid or expired.
+  rpc Verify(VerifyRequest) returns (VerifyResponse);
+}
+
+message IssueRequest {
+  // The user the token is for (becomes the `sub` claim).
+  string subject = 1;
+}
+
+message IssueResponse {
+  string access_token = 1;
+  // Token lifetime in seconds.
+  int64 expires_in = 2;
+}
+
+message VerifyRequest {
+  string access_token = 1;
+}
+
+message VerifyResponse {
+  string subject = 1;
+  // Expiry as unix seconds.
+  int64 expires_at = 2;
+}
