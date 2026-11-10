@@ -1,13 +1,14 @@
-# E-Wallet: authentication, Identity and API gateway
+# E-Wallet: authentication, Identity, API gateway and ledger
 
-These pages document the three components that exist today. The other services in the
-[system design](../E-Wallet%20Micro-Service%20System%20Design.md) (wallet, payment, ledger, ...) are not built yet.
+These pages document the four components that exist today. The other services in the
+[system design](../E-Wallet%20Micro-Service%20System%20Design.md) (wallet, payment, ...) are not built yet.
 
 | Page | What it covers |
 | --- | --- |
 | [API gateway](api-gateway.md) | The public entry point: routing, token checks, rate limiting, and the YAML configuration |
 | [Identity service](identity-service.md) | Registration, login, refresh, logout and the current user |
 | [Auth library and service](libs-auth.md) | `libs/auth`: issues and verifies access tokens over internal gRPC |
+| [Ledger service](ledger-service.md) | The append-only record of debits and credits per account, posted and read over internal gRPC |
 
 ## The components
 
@@ -16,7 +17,9 @@ These pages document the three components that exist today. The other services i
 | API gateway | Go | [`gateway/`](../gateway) | Routes public requests, limits request rates, checks tokens | `:8080` (HTTP) | Clients |
 | Identity | PHP, Laravel 13 | [`services/identity/`](../services/identity) | Owns users and refresh tokens; implements the auth endpoints | `127.0.0.1:8000` (HTTP) | The gateway only |
 | Auth (`libs/auth`) | Go | [`libs/auth/`](../libs/auth) | Holds the signing key; issues and verifies RS256 access tokens | `127.0.0.1:9090` (gRPC) | Internal services only |
+| Ledger | Go | [`services/ledger/`](../services/ledger) | Append-only debits and credits per account, with checkpointed balances | `127.0.0.1:9091` (gRPC) | Internal services only |
 | Redis | - | - | Rate limit counters (gateway) and login backoff (Identity) | `127.0.0.1:6379` | Gateway and Identity |
+| PostgreSQL | - | - | The ledger's entries and checkpoints | `127.0.0.1:5432` | The ledger |
 
 ## How they fit together
 
@@ -42,6 +45,19 @@ These pages document the three components that exist today. The other services i
 Only `libs/auth` holds the private key. Nothing else can create a valid access token, and nothing
 else needs the key to check one: services ask `libs/auth` to verify.
 
+The ledger sits beside this, not behind it. It is internal only: the services that move money
+(the e-wallet and payment services, once built) call it over gRPC, and it never goes through the gateway.
+
+```text
+        e-wallet / payment services (not built yet)
+                    |  gRPC Debit, Credit, GetBalance, ListEntries, ListCheckpoints
+                    v
+             +--------------+
+             |    Ledger    |
+             |    :9091     | -- entries, checkpoints (PostgreSQL, append-only)
+             +--------------+
+```
+
 ## Request flows
 
 **Log in** (`POST /v1/auth/login`)
@@ -62,6 +78,11 @@ and returns a new access and refresh token (rotation). Using an old refresh toke
 **Log out** (`POST /v1/auth/logout`): Identity revokes the given refresh token. The access token
 already issued stays valid until it expires (at most 15 minutes), because access tokens are stateless.
 
+**Post to the ledger** (`Debit` or `Credit` over gRPC): the ledger takes a lock on the account, checks whether
+the transaction was already posted, checks the balance (a debit larger than the balance is refused,
+and every debit on a zero balance is), appends one entry and returns the new balance. The balance is
+the account's latest checkpoint plus the entries after it. See [Ledger service](ledger-service.md).
+
 ## Security model in one place
 
 - **Key custody:** the signing key is a file read only by `libs/auth`. It is not in the repo (`*.pem` is git-ignored).
@@ -69,11 +90,13 @@ already issued stays valid until it expires (at most 15 minutes), because access
 - **Identity headers:** the gateway removes any client-supplied `X-User-ID`, and any header with an underscore in its name, before forwarding. Only the gateway can say who the user is.
 - **Fail closed:** if the auth service is unreachable the gateway returns 503 for protected routes, and Identity returns 500. Neither lets a request through unchecked.
 - **Brute force:** the gateway rate limits register, login and refresh per client IP. Identity adds an exponential lockout on repeated failed logins per email and IP.
+- **An append-only ledger:** the ledger's database refuses `UPDATE`, `DELETE` and `TRUNCATE` on its tables, so history can only be added to. Money is stored as whole cents in integers, and a debit can never take an account below zero, even with many concurrent debits across several servers.
+- **Internal-only ledger:** like the auth service, it has no application-level secret. Keep it off the gateway and restrict who may post with the mesh or network policy.
 
 ## Run everything locally
 
 Prerequisites: Go 1.26, PHP 8.3 or newer with the `redis` and `grpc` extensions, Composer, Redis 7,
-and `openssl`. Identity cannot serve any auth request without the `grpc` extension (see
+`openssl`, and PostgreSQL 13 or newer (or Docker) for the ledger. Identity cannot serve any auth request without the `grpc` extension (see
 [Troubleshooting](identity-service.md#troubleshooting)).
 
 Start each in its own terminal, in this order:
@@ -97,6 +120,12 @@ php artisan serve                       # http://127.0.0.1:8000
 # 4. Gateway
 cd gateway
 go run ./cmd/server -config gateway.yaml  # http://127.0.0.1:8080
+
+# 5. Ledger (independent of the four above; needs a PostgreSQL, here a throwaway one in Docker)
+cd services/ledger
+make test-db-up
+LEDGER_DATABASE_URL='postgres://postgres:ledger@127.0.0.1:55432/ledger?sslmode=disable' go run ./cmd/server
+# gRPC on 127.0.0.1:9091; see docs/ledger-service.md for calling it
 ```
 
 Then use the API through the gateway:
@@ -127,6 +156,7 @@ curl -s -X POST $GW/v1/auth/logout -H "Authorization: Bearer $ACCESS_TOKEN" \
 | `libs/auth` | `cd libs/auth && make test` | Go |
 | Gateway | `cd gateway && go test -race ./...` | Go (Redis is simulated in-process) |
 | Identity | `cd services/identity && php artisan test --compact` | PHP with `redis`, and a running Redis (login tests use it) |
+| Ledger | `cd services/ledger && make test-db-up && make test` | Go and a real PostgreSQL (Docker is easiest); `make test-db-down` afterwards |
 
 ## Where each component is configured
 
@@ -135,6 +165,7 @@ curl -s -X POST $GW/v1/auth/logout -H "Authorization: Bearer $ACCESS_TOKEN" \
 | Gateway | A YAML file, [`gateway/gateway.yaml`](../gateway/gateway.yaml) (`-config` flag or `GATEWAY_CONFIG`) |
 | Identity | Environment variables, see [`.env.example`](../services/identity/.env.example) and [`config/jwt.php`](../services/identity/config/jwt.php) |
 | Auth | Environment variables `AUTH_*`, see [libs/auth](libs-auth.md#configuration) |
+| Ledger | Environment variables `LEDGER_*`, see [Ledger service](ledger-service.md#configuration) |
 
 ## Differences from the system design document
 
@@ -142,10 +173,13 @@ curl -s -X POST $GW/v1/auth/logout -H "Authorization: Bearer $ACCESS_TOKEN" \
 - **Tokens:** tokens are issued by a separate Go service (`libs/auth`) over gRPC, not by Laravel Passport inside Identity. They are RS256 JWTs with a 15-minute lifetime, as in the design.
 - **Refresh tokens:** the design allows 30 days; the default here is `JWT_REFRESH_TTL=15` minutes. It is a setting, so change it with the environment variable.
 - **Identity data model:** users have an integer `id`, `name`, `email` and `password` (the Laravel default). Phone numbers, UUIDs, user status, the `sessions` table, MFA and OAuth2 clients from the design are not built.
+- **Ledger amounts:** the design stores `numeric(18,6)`. The ledger stores whole cents in a `bigint` (amount x 100 on the way in, / 100 on the way out), because the API takes floats and integer storage keeps every sum exact. Amounts must be a whole number of cents.
+- **Ledger balance:** the design's `balance_after` column is not stored. A balance is the latest checkpoint (month, quarter, year or five-year) plus the entries after it. There is also no `currency` column, and `account_id` is a UUID rather than text.
+- **Ledger writes:** entries are posted over gRPC (`Debit`, `Credit`), not consumed from the `ledger.entries` Kafka topic. The `events/` package is an empty placeholder.
 - **Public key distribution:** not needed, because services verify through `libs/auth` instead of holding the public key. Vault is not integrated.
 
 ## Not built yet
 
-Wallet, payment, ledger and the other services; TLS termination; metrics and tracing; Dockerfiles,
+Wallet, payment and the other services (and so the accounts the ledger posts to); TLS termination; metrics and tracing; Dockerfiles,
 Helm charts, compose and CI (all still empty skeletons); an Istio policy that limits who may call
-`Issue`; token revocation before expiry; refresh token cleanup.
+`Issue` or post to the ledger; token revocation before expiry; refresh token cleanup; an atomic ledger transfer call and runtime reconciliation of checkpoints.

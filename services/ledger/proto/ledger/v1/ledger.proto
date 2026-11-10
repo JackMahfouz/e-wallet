@@ -1,0 +1,133 @@
+syntax = "proto3";
+
+package ledger.v1;
+
+option go_package = "github.com/JackMahfouz/e-wallet/services/ledger/gen/ledger/v1;ledgerv1";
+
+// Ledger is an append-only record of debits and credits, one ledger per account.
+//
+// Every write appends a new entry; entries are never updated or deleted. An account's balance is
+// computed from its latest checkpoint plus the entries after it, and a debit larger than that
+// balance is refused (an account with no entries has a balance of zero).
+//
+// Amounts are doubles on this API but are stored and summed as whole cents: multiplied by 100 on
+// the way in (and rejected unless they are a whole number of cents) and divided by 100 on the way
+// out.
+//
+// INTERNAL ONLY: this service must never be routed through the API gateway. Accounts belong to
+// the e-wallet service; the ledger only knows account ids.
+service Ledger {
+  // Debit appends a debit entry. Fails with FAILED_PRECONDITION if the amount exceeds the
+  // account's balance, and INVALID_ARGUMENT for a bad id or amount.
+  rpc Debit(PostRequest) returns (PostResponse);
+
+  // Credit appends a credit entry. The first credit to an unknown account id starts its ledger.
+  rpc Credit(PostRequest) returns (PostResponse);
+
+  // GetBalance returns the account's current balance (0 for an account with no entries).
+  rpc GetBalance(GetBalanceRequest) returns (GetBalanceResponse);
+
+  // ListEntries returns an account's entries in order, oldest first, after a given sequence number.
+  rpc ListEntries(ListEntriesRequest) returns (ListEntriesResponse);
+
+  // ListCheckpoints returns an account's closing-balance checkpoints, newest first.
+  rpc ListCheckpoints(ListCheckpointsRequest) returns (ListCheckpointsResponse);
+}
+
+enum Direction {
+  DIRECTION_UNSPECIFIED = 0;
+  DIRECTION_DEBIT = 1;
+  DIRECTION_CREDIT = 2;
+}
+
+enum Period {
+  PERIOD_UNSPECIFIED = 0;
+  PERIOD_MONTH = 1;
+  PERIOD_QUARTER = 2;
+  PERIOD_YEAR = 3;
+  PERIOD_FIVE_YEAR = 4;
+}
+
+message PostRequest {
+  // The account whose ledger gets the entry (a UUID).
+  string account_id = 1;
+  // Identifies the business transaction (a UUID). Posting the same transaction_id to the same
+  // account in the same direction again is a retry: it returns the original entry and appends
+  // nothing. Reusing it with a different amount fails with ALREADY_EXISTS.
+  string transaction_id = 2;
+  // Greater than zero, at most 10000000000, and a whole number of cents (at most 2 decimals).
+  double amount = 3;
+}
+
+message PostResponse {
+  Entry entry = 1;
+  // The account's balance after this call. For a retry it is the current balance.
+  double balance = 2;
+  // True when the transaction had already been posted and nothing new was appended.
+  bool replayed = 3;
+}
+
+message GetBalanceRequest {
+  string account_id = 1;
+}
+
+message GetBalanceResponse {
+  double balance = 1;
+  // Sequence number of the account's newest entry; 0 when it has none.
+  int64 last_seq = 2;
+}
+
+message ListEntriesRequest {
+  string account_id = 1;
+  // Return entries with a sequence number greater than this. Start with 0.
+  int64 after_seq = 2;
+  // Default 100, maximum 1000.
+  int32 limit = 3;
+}
+
+message ListEntriesResponse {
+  repeated Entry entries = 1;
+  // True when more entries follow; continue with after_seq set to the last returned seq.
+  bool has_more = 2;
+}
+
+message ListCheckpointsRequest {
+  string account_id = 1;
+  // Only this period; unspecified returns all of them.
+  Period period = 2;
+  // Default 100, maximum 1000.
+  int32 limit = 3;
+}
+
+message ListCheckpointsResponse {
+  repeated Checkpoint checkpoints = 1;
+}
+
+message Entry {
+  string id = 1;
+  string account_id = 2;
+  string transaction_id = 3;
+  // 1, 2, 3, ... per account, with no gaps. This is the ledger's true order.
+  int64 seq = 4;
+  Direction direction = 5;
+  double amount = 6;
+  // When the entry was appended: microseconds since the Unix epoch (UTC).
+  int64 created_at_micros = 7;
+}
+
+// A checkpoint is an account's closing balance for a finished period. The current balance is the
+// latest checkpoint plus the entries after last_seq.
+message Checkpoint {
+  string id = 1;
+  string account_id = 2;
+  Period period = 3;
+  // Microseconds since the Unix epoch (UTC). The period is the half-open interval
+  // [period_start_micros, period_end_micros): the end is the instant the next period starts.
+  int64 period_start_micros = 4;
+  int64 period_end_micros = 5;
+  // The balance after the entry with this sequence number.
+  int64 last_seq = 6;
+  double balance = 7;
+  // When the checkpoint was appended: microseconds since the Unix epoch (UTC).
+  int64 created_at_micros = 8;
+}

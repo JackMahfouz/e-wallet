@@ -295,7 +295,7 @@ tested without waiting. The tests cover:
   protected request makes one gRPC call to the auth service.
 - **Rate limits are per client address only**, not per user, and use fixed windows.
 - **During a Redis outage**, limits are per gateway instance.
-- **Only Identity is routed.** The other services in the design document are not built.
+- **Only Identity is routed.** The ledger is built but is internal only, so it is deliberately not routed; the other services in the design document are not built.
 - **The system design document describes an Envoy gateway.** This Go gateway replaces that plan;
   the empty `envoy.yaml`, `rate-limit/` and `auth-filter/` placeholders are still in `gateway/`.
 
