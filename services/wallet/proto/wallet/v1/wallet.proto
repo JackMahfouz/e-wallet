@@ -1,0 +1,190 @@
+syntax = "proto3";
+
+package wallet.v1;
+
+option go_package = "github.com/JackMahfouz/e-wallet/services/wallet/gen/wallet/v1;walletv1";
+
+// Wallet is the internal API other services (the Payment service, later) use to move money on
+// users' accounts, reserve it, and look at it. Users never call it: they use the REST API through
+// the gateway.
+//
+// Money is moved by the ledger; the wallet decides whether it may be, records every movement as an
+// operation, and sees each one through. Every call that moves money or reserves it carries an
+// idempotency key (a UUID): repeating a call with the same key and the same request returns what the
+// first call made, and the same key with a different request fails with ALREADY_EXISTS.
+//
+// A call returns the operation however far it got. It may still be PENDING or SETTLING because the
+// ledger was unreachable; the wallet finishes it in the background and GetOperation shows how it
+// ended. A spend over the account's (or the wallet's) daily limit is not refused: it is saved as
+// AWAITING_CONFIRMATION, with nothing moved, and the account's owner confirms or cancels it through
+// the REST API.
+//
+// Amounts are doubles on this API, as on the ledger's, but are whole cents inside: at most two
+// decimals, greater than zero and at most 10000000000.
+//
+// INTERNAL ONLY: this service must never be routed through the API gateway.
+service Wallet {
+  // Credit adds money to an account.
+  rpc Credit(MoveRequest) returns (Operation);
+
+  // Debit takes money from an account. If hold_id is set, that hold is consumed by it.
+  // Fails with FAILED_PRECONDITION ("insufficient funds") if the account cannot spare the amount.
+  rpc Debit(MoveRequest) returns (Operation);
+
+  // Transfer moves money from one account to another. If hold_id is set, it is consumed.
+  rpc Transfer(MoveRequest) returns (Operation);
+
+  // GetOperation returns an operation, to see how it ended.
+  rpc GetOperation(GetOperationRequest) returns (Operation);
+
+  // CreateHold reserves money on an account until it is captured, released or expires.
+  // Fails with FAILED_PRECONDITION ("insufficient funds") if the account cannot spare it.
+  rpc CreateHold(CreateHoldRequest) returns (Hold);
+
+  // ReleaseHold gives a hold's money back. Only the service that made it can. Releasing twice is
+  // fine; releasing a hold that was captured fails with FAILED_PRECONDITION.
+  rpc ReleaseHold(ReleaseHoldRequest) returns (Hold);
+
+  // GetAccount returns an account with its balance, what is held and what is available.
+  rpc GetAccount(GetAccountRequest) returns (Account);
+}
+
+// The codes are stored in the database and must not change.
+enum OperationKind {
+  OPERATION_KIND_UNSPECIFIED = 0;
+  OPERATION_KIND_CREDIT = 1;
+  OPERATION_KIND_DEBIT = 2;
+  OPERATION_KIND_TRANSFER = 3;
+  OPERATION_KIND_DEPOSIT = 4;
+  OPERATION_KIND_WITHDRAWAL = 5;
+}
+
+enum OperationStatus {
+  OPERATION_STATUS_UNSPECIFIED = 0;
+  // Over a daily limit: nothing has moved or been reserved; the owner must confirm or cancel.
+  OPERATION_STATUS_AWAITING_CONFIRMATION = 1;
+  // Accepted; no money has left its source yet.
+  OPERATION_STATUS_PENDING = 2;
+  // Money has left its source and has not arrived yet.
+  OPERATION_STATUS_SETTLING = 3;
+  // Done. Final.
+  OPERATION_STATUS_COMPLETED = 4;
+  // Did not happen, or was refunded. Final; see failure_reason.
+  OPERATION_STATUS_FAILED = 5;
+}
+
+enum FailureReason {
+  FAILURE_REASON_UNSPECIFIED = 0;
+  FAILURE_REASON_INSUFFICIENT_FUNDS = 1;
+  FAILURE_REASON_TIMED_OUT = 2;
+  FAILURE_REASON_CONFIRMATION_EXPIRED = 3;
+  FAILURE_REASON_REJECTED = 4;
+  FAILURE_REASON_CANCELLED = 5;
+}
+
+enum LimitScope {
+  LIMIT_SCOPE_UNSPECIFIED = 0;
+  LIMIT_SCOPE_ACCOUNT = 1;
+  LIMIT_SCOPE_WALLET = 2;
+}
+
+enum AccountStatus {
+  ACCOUNT_STATUS_UNSPECIFIED = 0;
+  ACCOUNT_STATUS_ACTIVE = 1;
+  ACCOUNT_STATUS_FROZEN = 2;
+  ACCOUNT_STATUS_CLOSED = 3;
+}
+
+message MoveRequest {
+  // The calling service, lower case: "payment". Part of the idempotency scope.
+  string service = 1;
+  // A UUID that identifies this request (see the service comment).
+  string idempotency_key = 2;
+  // The account credited or debited; a transfer's source (a UUID).
+  string account_id = 3;
+  // A transfer's destination (a UUID). Must be empty for a credit or a debit.
+  string counterparty_account_id = 4;
+  // Greater than zero, at most 10000000000, and a whole number of cents.
+  double amount = 5;
+  // A hold on account_id to consume (a UUID). Not allowed on a credit.
+  string hold_id = 6;
+}
+
+message GetOperationRequest {
+  string operation_id = 1;
+}
+
+message Confirmation {
+  // Which limit the spend would exceed.
+  LimitScope limit_scope = 1;
+  // The owner must confirm before this instant; microseconds since the Unix epoch (UTC).
+  int64 expires_at_micros = 2;
+}
+
+message Operation {
+  string id = 1;
+  OperationKind kind = 2;
+  OperationStatus status = 3;
+  FailureReason failure_reason = 4;
+  string account_id = 5;
+  string counterparty_account_id = 6;
+  double amount = 7;
+  // True when it counts against the daily limits: money leaving the wallet.
+  bool spending = 8;
+  // Set while status is AWAITING_CONFIRMATION.
+  Confirmation confirmation = 9;
+  string initiator = 10;
+  // Microseconds since the Unix epoch (UTC).
+  int64 created_at_micros = 11;
+  int64 updated_at_micros = 12;
+  // When an operation that has not succeeded is failed: five working days after it was accepted.
+  int64 deadline_at_micros = 13;
+  // 0 until the operation is completed or failed.
+  int64 completed_at_micros = 14;
+}
+
+message CreateHoldRequest {
+  string service = 1;
+  string idempotency_key = 2;
+  string account_id = 3;
+  double amount = 4;
+  string reason = 5;
+  // How long the hold lasts: greater than zero, and at most the wallet's configured maximum.
+  int64 ttl_seconds = 6;
+}
+
+message ReleaseHoldRequest {
+  string service = 1;
+  string hold_id = 2;
+}
+
+message Hold {
+  string id = 1;
+  string account_id = 2;
+  double amount = 3;
+  string reason = 4;
+  // Microseconds since the Unix epoch (UTC).
+  int64 expires_at_micros = 5;
+  // 0 if not released.
+  int64 released_at_micros = 6;
+  // The operation that consumed the hold; empty if none did.
+  string captured_by_operation_id = 7;
+}
+
+message GetAccountRequest {
+  string account_id = 1;
+}
+
+message Account {
+  string id = 1;
+  string wallet_id = 2;
+  string name = 3;
+  AccountStatus status = 4;
+  // The account's daily limit; meaningful only if has_daily_limit.
+  double daily_limit = 5;
+  bool has_daily_limit = 6;
+  double balance = 7;
+  double held = 8;
+  double available = 9;
+  double spent_today = 10;
+}

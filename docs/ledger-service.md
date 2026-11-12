@@ -1,8 +1,7 @@
 # Ledger service
 
 The ledger is an **append-only record of debits and credits**, one ledger per account. Every
-post adds a new entry; nothing is ever updated or deleted. Other services (the e-wallet and payment
-services) post to it and read from it over gRPC.
+post adds a new entry; nothing is ever updated or deleted. Other services (the [wallet service](wallet-service.md) and, later, payment) post to it and read from it over gRPC.
 
 - **Path:** [`services/ledger/`](../services/ledger), module `github.com/JackMahfouz/e-wallet/services/ledger`
 - **Stack:** Go, gRPC, PostgreSQL (13 or newer; tested on 16)
@@ -10,8 +9,7 @@ services) post to it and read from it over gRPC.
 - **Contract:** [`proto/ledger/v1/ledger.proto`](../services/ledger/proto/ledger/v1/ledger.proto) (package `ledger.v1`, service `Ledger`)
 - **Internal only.** It must never be routed through the [API gateway](api-gateway.md). See [Security notes](#security-notes).
 
-The ledger does not own accounts. Accounts (and which user has which) belong to the e-wallet
-service; the ledger only knows an account's id (a UUID). The first credit to an unknown id starts that
+The ledger does not own accounts. Accounts (and which user has which) belong to the [wallet service](wallet-service.md); the ledger only knows an account's id (a UUID). The first credit to an unknown id starts that
 account's ledger.
 
 ## The gRPC API
@@ -81,7 +79,9 @@ Timestamps are microseconds since the Unix epoch (UTC).
 
 On the API an amount is a plain `double`. Underneath, every amount is stored and summed as **whole
 cents in a 64-bit integer**: multiplied by 100 on the way in, divided by 100 on the way out. Floats exist
-only at the gRPC edge, so all arithmetic on money is exact integer arithmetic.
+only at the gRPC edge, so all arithmetic on money is exact integer arithmetic. The casting itself is done by the
+shared [money package](process-money.md), which the wallet service uses too, so the two can never disagree about
+what a valid amount is.
 
 An amount is accepted when it is finite, greater than zero, at most `10000000000`, and a whole number
 of cents. It is never silently rounded to a different value:
@@ -230,7 +230,10 @@ LEDGER_DATABASE_URL='postgres://postgres:ledger@127.0.0.1:55432/ledger?sslmode=d
 
 The generated Go client is importable (it lives in `gen/`, not `internal/`). Until the module is
 published, point your `go.mod` at the local path:
-`replace github.com/JackMahfouz/e-wallet/services/ledger => ../ledger`.
+`replace github.com/JackMahfouz/e-wallet/services/ledger => ../ledger`. The ledger module depends on
+[`libs/process-money`](process-money.md), and a `replace` in a dependency is ignored, so add that one too:
+`replace github.com/JackMahfouz/e-wallet/libs/process-money => ../../libs/process-money` (adjust the path to where
+your module sits). The [wallet service](wallet-service.md) is the working example.
 
 ```go
 import (
@@ -275,7 +278,7 @@ services/ledger/
   migrations/                    SQL migrations (goose), embedded in the binary
   cmd/server/main.go             entry point: config, database, migrations, gRPC server, checkpoint job
   internal/config/               environment loading
-  internal/domain/               money, entries, periods and the storage interface (no infrastructure imports)
+  internal/domain/               entries, periods and the storage interface (no infrastructure imports). Money casting is in libs/process-money
   internal/service/              the rules: debit, credit, retries, balance check; the checkpointer
   internal/store/                the PostgreSQL implementation: queries, locking, checkpoints, migrations
   internal/handler/              gRPC: float <-> cents conversion, status codes, request logging
@@ -310,7 +313,7 @@ so a missing database is a failure instead.
 
 What is covered:
 
-- **Money:** every whole-cent amount survives the trip through a float (hundreds of thousands of random values), and every kind of invalid amount is refused.
+- **Money:** the ledger's own tests check that the handler casts amounts at the edge and refuses every kind of invalid amount; the round-trip property test (every whole-cent amount survives the trip through a float) now lives with the [money package](process-money.md).
 - **Append-only:** `UPDATE`, `DELETE` and `TRUNCATE` are refused on both tables, and the rows are unchanged afterwards. The database also rejects every row that breaks a constraint.
 - **The debit rule:** refused on a zero balance, an unknown account, and an amount one cent over; allowed for exactly the balance.
 - **Retries and conflicts**, and that the two legs of a transfer balance per transaction.
@@ -321,14 +324,14 @@ What is covered:
 ## Security notes
 
 - **Internal only.** There is no authentication or authorisation on the port, in line with the [auth service](libs-auth.md). Keep it off the gateway and restrict callers with the mesh or network policy.
-- **Any caller can post.** Every service that can reach the port can credit and debit any account. An Istio `AuthorizationPolicy` allowing only the e-wallet and payment services to post is the intended follow-up; reads could be allowed more widely.
-- **The ledger trusts its callers' account ids.** It does not check that an account exists or who owns it; that is the e-wallet service's job.
+- **Any caller can post.** Every service that can reach the port can credit and debit any account. An Istio `AuthorizationPolicy` allowing only the wallet and payment services to post is the intended follow-up; reads could be allowed more widely.
+- **The ledger trusts its callers' account ids.** It does not check that an account exists or who owns it; that is the [wallet service](wallet-service.md)'s job.
 - **No backdating.** The API cannot set an entry's time: `created_at` is the database's clock when the entry is appended.
 - **Database access is part of the trust boundary.** Use a role with only `INSERT` and `SELECT`, and a password file.
 
 ## Limitations and not built
 
-- **Accounts and ownership** (users with several accounts) belong to the e-wallet service.
+- **Accounts and ownership** (users with several accounts) belong to the [wallet service](wallet-service.md).
 - **No currency.** One implied two-decimal currency; the design's `currency` column is not there.
 - **No atomic transfer call:** a transfer is two posts, as described above.
 - **No Kafka.** The design's `ledger.entries` topic is not used; entries are posted over gRPC. [`internal/events/`](../services/ledger/internal/events) is a placeholder.

@@ -2,7 +2,6 @@ package domain_test
 
 import (
 	"errors"
-	"math"
 	"math/rand/v2"
 	"strings"
 	"testing"
@@ -10,113 +9,6 @@ import (
 
 	"github.com/JackMahfouz/e-wallet/services/ledger/internal/domain"
 )
-
-func TestToMinorUnitsMultipliesByOneHundred(t *testing.T) {
-	tests := map[string]struct {
-		amount float64
-		cents  int64
-	}{
-		"one cent":                   {0.01, 1},
-		"ten cents":                  {0.1, 10},
-		"seven cents":                {0.07, 7},
-		"whole unit":                 {1, 100},
-		"typical price":              {19.99, 1999},
-		"1.15 is 114.99999999999999": {1.15, 115},
-		"8.2 is not exact in binary": {8.2, 820},
-		"float noise: 0.1 + 0.2":     {0.1 + 0.2, 30},
-		"large":                      {1234567.89, 123456789},
-		"just under the maximum":     {9999999999.99, 999999999999},
-		"the maximum":                {domain.MaxAmount, 1_000_000_000_000},
-	}
-
-	for name, tc := range tests {
-		t.Run(name, func(t *testing.T) {
-			cents, err := domain.ToMinorUnits(tc.amount)
-
-			if err != nil || cents != tc.cents {
-				t.Errorf("ToMinorUnits(%v) = %d, %v; want %d", tc.amount, cents, err, tc.cents)
-			}
-		})
-	}
-}
-
-func TestToMinorUnitsRejectsAmountsThatAreNotWholeCents(t *testing.T) {
-	tests := map[string]struct {
-		amount  float64
-		message string
-	}{
-		"zero":                 {0, "greater than 0"},
-		"negative":             {-5, "greater than 0"},
-		"negative zero":        {math.Copysign(0, -1), "greater than 0"},
-		"NaN":                  {math.NaN(), "finite"},
-		"positive infinity":    {math.Inf(1), "finite"},
-		"negative infinity":    {math.Inf(-1), "finite"},
-		"half a cent too many": {10.005, "2 decimal places"},
-		"a tenth of a cent":    {0.001, "2 decimal places"},
-		"three decimals":       {1.234, "2 decimal places"},
-		"far below one cent":   {0.00001, "at least 0.01"},
-		"over the maximum":     {domain.MaxAmount + 0.01, "must not exceed"},
-		"astronomical":         {1e300, "must not exceed"},
-	}
-
-	for name, tc := range tests {
-		t.Run(name, func(t *testing.T) {
-			cents, err := domain.ToMinorUnits(tc.amount)
-
-			if !errors.Is(err, domain.ErrInvalidAmount) {
-				t.Fatalf("ToMinorUnits(%v) = %d, %v; want ErrInvalidAmount", tc.amount, cents, err)
-			}
-			if !strings.Contains(err.Error(), tc.message) {
-				t.Errorf("err = %q, want it to contain %q", err, tc.message)
-			}
-			if cents != 0 {
-				t.Errorf("cents = %d, want 0 alongside an error", cents)
-			}
-		})
-	}
-}
-
-func TestFromMinorUnitsDividesByOneHundred(t *testing.T) {
-	tests := map[int64]float64{
-		0:                 0,
-		1:                 0.01,
-		5:                 0.05,
-		100:               1,
-		1999:              19.99,
-		123456789:         1234567.89,
-		1_000_000_000_000: 10_000_000_000,
-		-250:              -2.5,
-	}
-
-	for cents, want := range tests {
-		if got := domain.FromMinorUnits(cents); got != want {
-			t.Errorf("FromMinorUnits(%d) = %v, want %v", cents, got, want)
-		}
-	}
-}
-
-func TestEveryWholeCentSurvivesTheTripThroughAFloat(t *testing.T) {
-	// The ledger stores cents, but callers speak floats. Any amount the ledger hands out must come
-	// back as exactly the same cents when it is posted again.
-	check := func(cents int64) {
-		t.Helper()
-
-		back, err := domain.ToMinorUnits(domain.FromMinorUnits(cents))
-		if err != nil || back != cents {
-			t.Fatalf("%d cents -> %v -> %d, %v", cents, domain.FromMinorUnits(cents), back, err)
-		}
-	}
-
-	for cents := int64(1); cents <= 300_000; cents++ {
-		check(cents)
-	}
-
-	random := rand.New(rand.NewPCG(1, 2))
-	for i := 0; i < 500_000; i++ {
-		check(1 + random.Int64N(1_000_000_000_000))
-	}
-	check(1_000_000_000_000)
-}
 
 func TestParseIDAcceptsUUIDsAndCanonicalizesThem(t *testing.T) {
 	got, err := domain.ParseID("account_id", "  3F2504E0-4F89-41D3-9A0C-0305E82C3301 ")

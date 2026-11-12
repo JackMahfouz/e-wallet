@@ -5,6 +5,7 @@ use App\Services\AuthService;
 use App\Services\TokenService;
 use Illuminate\Support\Facades\Exceptions;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Str;
 use Tests\Fakes\FakeTokenService;
 
 beforeEach(function () {
@@ -54,6 +55,22 @@ describe('register', function () {
         $user = User::where('email', 'ada@example.com')->sole();
         expect(Hash::check('secret-password', $user->password))->toBeTrue();
         expect($user->refreshTokens)->toHaveCount(1);
+    });
+
+    test('gives the user a UUID id and issues the token for that id', function () {
+        $tokenService = new FakeTokenService;
+        $this->app->instance(TokenService::class, $tokenService);
+
+        $response = $this->postJson('/api/v1/auth/register', [
+            'name' => 'Ada Lovelace',
+            'email' => 'ada@example.com',
+            'password' => 'secret-password',
+        ])->assertCreated();
+
+        $user = User::where('email', 'ada@example.com')->sole();
+        expect(Str::isUuid($user->id))->toBeTrue();
+        expect($tokenService->verify($response->json('access_token')))->toBe($user->id);
+        expect($user->refreshTokens()->sole()->user_id)->toBe($user->id);
     });
 
     test('returns 422 when the email is already registered', function () {

@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"time"
 
+	processmoney "github.com/JackMahfouz/e-wallet/libs/process-money"
 	ledgerv1 "github.com/JackMahfouz/e-wallet/services/ledger/gen/ledger/v1"
 	"github.com/JackMahfouz/e-wallet/services/ledger/internal/domain"
 	"github.com/JackMahfouz/e-wallet/services/ledger/internal/service"
@@ -54,7 +55,7 @@ func (h *Handler) post(
 	do func(context.Context, service.PostInput) (service.PostResult, error),
 ) (*ledgerv1.PostResponse, error) {
 	// The amount is multiplied by 100 and checked here, once, and is cents from then on.
-	cents, err := domain.ToMinorUnits(req.GetAmount())
+	cents, err := processmoney.ToMinorUnits(req.GetAmount())
 	if err != nil {
 		return nil, h.status(ctx, err)
 	}
@@ -70,7 +71,7 @@ func (h *Handler) post(
 
 	return &ledgerv1.PostResponse{
 		Entry:    entryToProto(result.Entry),
-		Balance:  domain.FromMinorUnits(result.Balance),
+		Balance:  processmoney.FromMinorUnits(result.Balance),
 		Replayed: result.Replayed,
 	}, nil
 }
@@ -82,7 +83,7 @@ func (h *Handler) GetBalance(ctx context.Context, req *ledgerv1.GetBalanceReques
 		return nil, h.status(ctx, err)
 	}
 
-	return &ledgerv1.GetBalanceResponse{Balance: domain.FromMinorUnits(balance.Balance), LastSeq: balance.LastSeq}, nil
+	return &ledgerv1.GetBalanceResponse{Balance: processmoney.FromMinorUnits(balance.Balance), LastSeq: balance.LastSeq}, nil
 }
 
 // ListEntries returns a page of an account's entries, oldest first.
@@ -127,7 +128,7 @@ func (h *Handler) status(ctx context.Context, err error) error {
 	var insufficient *domain.InsufficientFundsError
 
 	switch {
-	case errors.Is(err, domain.ErrInvalidAmount), errors.Is(err, domain.ErrInvalidID), errors.Is(err, domain.ErrInvalidPeriod):
+	case errors.Is(err, processmoney.ErrInvalidAmount), errors.Is(err, domain.ErrInvalidID), errors.Is(err, domain.ErrInvalidPeriod):
 		return status.Error(codes.InvalidArgument, err.Error())
 	case errors.As(err, &insufficient):
 		return status.Error(codes.FailedPrecondition, err.Error())
@@ -151,7 +152,7 @@ func entryToProto(entry domain.Entry) *ledgerv1.Entry {
 		TransactionId:   entry.TransactionID,
 		Seq:             entry.Seq,
 		Direction:       directionToProto(entry.Direction),
-		Amount:          domain.FromMinorUnits(entry.Amount),
+		Amount:          processmoney.FromMinorUnits(entry.Amount),
 		CreatedAtMicros: entry.CreatedAt.UnixMicro(),
 	}
 }
@@ -164,7 +165,7 @@ func checkpointToProto(checkpoint domain.Checkpoint) *ledgerv1.Checkpoint {
 		PeriodStartMicros: checkpoint.PeriodStart.UnixMicro(),
 		PeriodEndMicros:   checkpoint.PeriodEnd.UnixMicro(),
 		LastSeq:           checkpoint.LastSeq,
-		Balance:           domain.FromMinorUnits(checkpoint.Balance),
+		Balance:           processmoney.FromMinorUnits(checkpoint.Balance),
 		CreatedAtMicros:   checkpoint.CreatedAt.UnixMicro(),
 	}
 }

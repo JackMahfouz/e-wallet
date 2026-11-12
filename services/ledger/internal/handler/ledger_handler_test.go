@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	processmoney "github.com/JackMahfouz/e-wallet/libs/process-money"
 	ledgerv1 "github.com/JackMahfouz/e-wallet/services/ledger/gen/ledger/v1"
 	"github.com/JackMahfouz/e-wallet/services/ledger/internal/domain"
 	"github.com/JackMahfouz/e-wallet/services/ledger/internal/handler"
@@ -163,7 +164,7 @@ func TestErrorsBecomeTheRightStatusCodes(t *testing.T) {
 		message string
 	}{
 		"invalid id":           {fmt.Errorf("%w: account_id must be a UUID", domain.ErrInvalidID), codes.InvalidArgument, "account_id must be a UUID"},
-		"invalid amount":       {fmt.Errorf("%w: must be greater than 0", domain.ErrInvalidAmount), codes.InvalidArgument, "must be greater than 0"},
+		"invalid amount":       {fmt.Errorf("%w: must be greater than 0", processmoney.ErrInvalidAmount), codes.InvalidArgument, "must be greater than 0"},
 		"invalid period":       {fmt.Errorf("%w: nope", domain.ErrInvalidPeriod), codes.InvalidArgument, "nope"},
 		"insufficient funds":   {&domain.InsufficientFundsError{Balance: 500, Requested: 1050}, codes.FailedPrecondition, "insufficient funds: balance 5.00, requested 10.50"},
 		"transaction conflict": {domain.ErrTransactionConflict, codes.AlreadyExists, "different amount"},

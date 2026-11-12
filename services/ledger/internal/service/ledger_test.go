@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	processmoney "github.com/JackMahfouz/e-wallet/libs/process-money"
 	"github.com/JackMahfouz/e-wallet/services/ledger/internal/domain"
 	"github.com/JackMahfouz/e-wallet/services/ledger/internal/service"
 	"github.com/JackMahfouz/e-wallet/services/ledger/internal/store"
@@ -288,8 +289,8 @@ func TestInvalidInputIsRefusedBeforeTouchingTheLedger(t *testing.T) {
 		"account id is not a uuid":     {service.PostInput{AccountID: "alice", TransactionID: testdb.UUID(), Amount: 100}, domain.ErrInvalidID},
 		"account id is empty":          {service.PostInput{AccountID: "", TransactionID: testdb.UUID(), Amount: 100}, domain.ErrInvalidID},
 		"transaction id is not a uuid": {service.PostInput{AccountID: valid, TransactionID: "t-1", Amount: 100}, domain.ErrInvalidID},
-		"zero amount":                  {service.PostInput{AccountID: valid, TransactionID: testdb.UUID(), Amount: 0}, domain.ErrInvalidAmount},
-		"negative amount":              {service.PostInput{AccountID: valid, TransactionID: testdb.UUID(), Amount: -100}, domain.ErrInvalidAmount},
+		"zero amount":                  {service.PostInput{AccountID: valid, TransactionID: testdb.UUID(), Amount: 0}, processmoney.ErrInvalidAmount},
+		"negative amount":              {service.PostInput{AccountID: valid, TransactionID: testdb.UUID(), Amount: -100}, processmoney.ErrInvalidAmount},
 	}
 
 	for name, tc := range tests {

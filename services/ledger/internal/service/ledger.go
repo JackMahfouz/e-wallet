@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 
+	processmoney "github.com/JackMahfouz/e-wallet/libs/process-money"
 	"github.com/JackMahfouz/e-wallet/services/ledger/internal/domain"
 )
 
@@ -66,7 +67,7 @@ func (l *Ledger) post(ctx context.Context, direction domain.Direction, in PostIn
 		return PostResult{}, err
 	}
 	if in.Amount <= 0 {
-		return PostResult{}, fmt.Errorf("%w: must be greater than 0", domain.ErrInvalidAmount)
+		return PostResult{}, fmt.Errorf("%w: must be greater than 0", processmoney.ErrInvalidAmount)
 	}
 
 	var result PostResult

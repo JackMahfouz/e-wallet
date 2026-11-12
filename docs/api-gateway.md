@@ -1,8 +1,8 @@
 # API gateway
 
 The gateway is the public entry point. It is a small Go reverse proxy, driven entirely by one YAML
-file, that decides which requests are allowed through and where they go. Today it fronts only the
-[Identity service](identity-service.md).
+file, that decides which requests are allowed through and where they go. Today it fronts the
+[Identity service](identity-service.md) and the [wallet service](wallet-service.md).
 
 - **Path:** [`gateway/`](../gateway), module `github.com/JackMahfouz/e-wallet/gateway`
 - **Default address:** `:8080`
@@ -90,7 +90,7 @@ Method and path pairs must be unique across routes.
 
 ### The shipped configuration
 
-[`gateway.yaml`](../gateway/gateway.yaml) routes only Identity:
+[`gateway.yaml`](../gateway/gateway.yaml) has two upstreams, `identity` (`http://127.0.0.1:8000`, path prefix `/api`) and `wallet` (`http://127.0.0.1:8081`, no prefix, a 15 second timeout because a transfer waits on the ledger). The Identity routes:
 
 | Route | Method and path | Auth | Rate limit |
 | --- | --- | --- | --- |
@@ -100,9 +100,29 @@ Method and path pairs must be unique across routes.
 | `auth-logout` | `POST /v1/auth/logout` | yes | none |
 | `auth-me` | `GET /v1/auth/me` | yes | none |
 
+The wallet routes. Every one needs a token (the wallet checks it again itself and never trusts `X-User-ID`).
+Reads are unlimited; anything that changes state, and so may carry a one-time code in `X-OTP`, is rate limited to 30
+per minute per client, which is also the only brake on guessing the static one-time code (see the
+[wallet service](wallet-service.md#authentication-and-one-time-codes)):
+
+| Route | Method and path | Auth | Rate limit |
+| --- | --- | --- | --- |
+| `wallet-get` | `GET /v1/wallets/me` | yes | none |
+| `wallet-update` | `PATCH /v1/wallets/me` | yes | 30 per minute |
+| `accounts-create` | `POST /v1/accounts` | yes | 30 per minute |
+| `accounts-read` | `GET /v1/accounts/...` (an account, and its transactions) | yes | none |
+| `accounts-write` | `POST`, `PATCH`, `DELETE` `/v1/accounts/...` (deposits, withdrawals, rename and limits, close) | yes | 30 per minute |
+| `transfers-create` | `POST /v1/transfers` | yes | 30 per minute |
+| `operations-read` | `GET /v1/operations/...` | yes | none |
+| `operations-write` | `POST /v1/operations/...` (confirm and cancel) | yes | 30 per minute |
+
+The two `/v1/accounts/` and two `/v1/operations/` entries are prefix routes (a trailing slash matches everything
+beneath it) split by method, so reads and writes can have different limits. The wallet's internal gRPC port is
+deliberately not routed.
+
 ### Adding a service
 
-Add an upstream and its routes; no code changes are needed:
+Add an upstream and its routes; no code changes are needed. This is how the wallet was added (the shipped entries above are the real ones; this is a smaller illustration):
 
 ```yaml
 upstreams:
@@ -295,7 +315,7 @@ tested without waiting. The tests cover:
   protected request makes one gRPC call to the auth service.
 - **Rate limits are per client address only**, not per user, and use fixed windows.
 - **During a Redis outage**, limits are per gateway instance.
-- **Only Identity is routed.** The ledger is built but is internal only, so it is deliberately not routed; the other services in the design document are not built.
+- **Only Identity and the wallet are routed.** The ledger, the auth service and the wallet's gRPC port are internal only, so they are deliberately not routed; the other services in the design document are not built.
 - **The system design document describes an Envoy gateway.** This Go gateway replaces that plan;
   the empty `envoy.yaml`, `rate-limit/` and `auth-filter/` placeholders are still in `gateway/`.
 

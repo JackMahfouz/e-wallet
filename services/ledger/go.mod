@@ -10,6 +10,7 @@ require (
 )
 
 require (
+	github.com/JackMahfouz/e-wallet/libs/process-money v0.0.0-00010101000000-000000000000
 	github.com/jackc/pgpassfile v1.0.0 // indirect
 	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
 	github.com/jackc/puddle/v2 v2.2.3 // indirect
@@ -22,3 +23,5 @@ require (
 	golang.org/x/text v0.43.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20261005182115-fad411399dd8 // indirect
 )
+
+replace github.com/JackMahfouz/e-wallet/libs/process-money => ../../libs/process-money

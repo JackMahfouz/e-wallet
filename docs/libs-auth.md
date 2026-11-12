@@ -9,7 +9,7 @@ this one whether a token is good.
 - **Default address:** `127.0.0.1:9090`
 - **Internal only.** It must never be routed through the API gateway. See [Security notes](#security-notes).
 
-Callers today: the [API gateway](api-gateway.md) (`Verify`) and the [Identity service](identity-service.md) (`Issue` and `Verify`).
+Callers today: the [API gateway](api-gateway.md) (`Verify`), the [Identity service](identity-service.md) (`Issue` and `Verify`) and the [wallet service](wallet-service.md) (`Verify`, on every request: it re-checks the token and ignores the gateway's `X-User-ID`).
 
 ## The gRPC API
 
@@ -41,10 +41,10 @@ A standard JWT signed with RS256 (RSA, PKCS#1 v1.5, SHA-256), so any JWT tool ca
 // header
 { "alg": "RS256", "typ": "JWT" }
 // payload
-{ "iss": "e-wallet", "sub": "42", "iat": 1794232000, "exp": 1794232900 }
+{ "iss": "e-wallet", "sub": "3f2504e0-4f89-41d3-9a0c-0305e82c3301", "iat": 1794232000, "exp": 1794232900 }
 ```
 
-`sub` is the user id as a string, `iss` is `AUTH_ISSUER`, and `exp` is `iat` plus `AUTH_ACCESS_TTL`.
+`sub` is the user id as a string (a UUID, since Identity's ids became UUIDs; the auth service itself accepts any non-empty subject), `iss` is `AUTH_ISSUER`, and `exp` is `iat` plus `AUTH_ACCESS_TTL`.
 The signature is made with the private key in `AUTH_PRIVATE_KEY_FILE`.
 
 `Verify` rejects a token if any of these is true:

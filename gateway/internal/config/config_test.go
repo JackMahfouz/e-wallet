@@ -26,43 +26,58 @@ func TestCommittedConfigIsValid(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 
-	got := map[string]struct {
-		method string
-		auth   bool
-		limit  bool
-	}{}
-	for _, route := range cfg.Routes {
-		if route.Upstream != "identity" {
-			t.Errorf("route %s goes to %q, want identity", route.Name, route.Upstream)
-		}
-		got[route.Path] = struct {
-			method string
-			auth   bool
-			limit  bool
-		}{route.Methods[0], route.Auth, route.RateLimit != nil}
+	type routeInfo struct {
+		upstream string
+		auth     bool
+		limit    bool
 	}
 
-	want := map[string]struct {
-		method string
-		auth   bool
-		limit  bool
-	}{
-		"/v1/auth/register": {"POST", false, true},
-		"/v1/auth/login":    {"POST", false, true},
-		"/v1/auth/refresh":  {"POST", false, true},
-		"/v1/auth/logout":   {"POST", true, false},
-		"/v1/auth/me":       {"GET", true, false},
-	}
-	if len(got) != len(want) {
-		t.Fatalf("got %d routes, want %d: %v", len(got), len(want), got)
-	}
-	for path, w := range want {
-		if got[path] != w {
-			t.Errorf("%s = %+v, want %+v", path, got[path], w)
+	got := map[string]routeInfo{}
+	for _, route := range cfg.Routes {
+		for _, method := range route.Methods {
+			key := method + " " + route.Path
+			if _, dup := got[key]; dup {
+				t.Errorf("%s is routed twice", key)
+			}
+			got[key] = routeInfo{route.Upstream, route.Auth, route.RateLimit != nil}
 		}
 	}
+
+	want := map[string]routeInfo{
+		// Identity.
+		"POST /v1/auth/register": {"identity", false, true},
+		"POST /v1/auth/login":    {"identity", false, true},
+		"POST /v1/auth/refresh":  {"identity", false, true},
+		"POST /v1/auth/logout":   {"identity", true, false},
+		"GET /v1/auth/me":        {"identity", true, false},
+
+		// Wallet: every route needs a token; reads are unlimited, anything that changes state is
+		// rate limited (the only brake on guessing the static one-time code).
+		"GET /v1/wallets/me":   {"wallet", true, false},
+		"PATCH /v1/wallets/me": {"wallet", true, true},
+		"POST /v1/accounts":    {"wallet", true, true},
+		"GET /v1/accounts/":    {"wallet", true, false},
+		"POST /v1/accounts/":   {"wallet", true, true},
+		"PATCH /v1/accounts/":  {"wallet", true, true},
+		"DELETE /v1/accounts/": {"wallet", true, true},
+		"POST /v1/transfers":   {"wallet", true, true},
+		"GET /v1/operations/":  {"wallet", true, false},
+		"POST /v1/operations/": {"wallet", true, true},
+	}
+	if len(got) != len(want) {
+		t.Errorf("got %d routes, want %d:\n got %v\nwant %v", len(got), len(want), got, want)
+	}
+	for key, w := range want {
+		if got[key] != w {
+			t.Errorf("%s = %+v, want %+v", key, got[key], w)
+		}
+	}
+
 	if cfg.Upstreams["identity"].PathPrefix != "/api" {
 		t.Errorf("identity path_prefix = %q, want /api", cfg.Upstreams["identity"].PathPrefix)
+	}
+	if wallet := cfg.Upstreams["wallet"]; wallet.URL != "http://127.0.0.1:8081" || wallet.PathPrefix != "" {
+		t.Errorf("wallet upstream = %+v, want the wallet's REST address with no path prefix", wallet)
 	}
 	if cfg.Redis == nil {
 		t.Error("redis block missing from the default config")

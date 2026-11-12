@@ -33,6 +33,9 @@ upstreams:
     url: http://127.0.0.1:8000
     path_prefix: /api      # prepended to every proxied path: /v1/auth/login -> /api/v1/auth/login
     timeout: 10s
+  wallet:
+    url: http://127.0.0.1:8081
+    timeout: 15s           # a transfer waits on the ledger, up to its own timeouts
 
 # A path ending in "/" matches everything beneath it; any other path matches exactly.
 # rate_limit is per client address and per route, counted in fixed windows.
@@ -66,3 +69,64 @@ routes:
     path: /v1/auth/me
     upstream: identity
     auth: true
+
+  # --- Wallet ---
+  # Every wallet route needs a token (the wallet checks it again itself; it never trusts
+  # X-User-ID). Reads are unlimited. Anything that changes state, and so may carry a one-time
+  # code in X-OTP, is rate limited per client: this is also the only brake on guessing the
+  # static one-time code, which is not a real second factor.
+  - name: wallet-get
+    methods: [GET]
+    path: /v1/wallets/me
+    upstream: wallet
+    auth: true
+
+  - name: wallet-update
+    methods: [PATCH]
+    path: /v1/wallets/me
+    upstream: wallet
+    auth: true
+    rate_limit: {requests: 30, window: 1m}
+
+  - name: accounts-create
+    methods: [POST]
+    path: /v1/accounts
+    upstream: wallet
+    auth: true
+    rate_limit: {requests: 30, window: 1m}
+
+  # Everything under /v1/accounts/{id}: read, transactions, rename and limit changes, close,
+  # deposits and withdrawals.
+  - name: accounts-read
+    methods: [GET]
+    path: /v1/accounts/
+    upstream: wallet
+    auth: true
+
+  - name: accounts-write
+    methods: [POST, PATCH, DELETE]
+    path: /v1/accounts/
+    upstream: wallet
+    auth: true
+    rate_limit: {requests: 30, window: 1m}
+
+  - name: transfers-create
+    methods: [POST]
+    path: /v1/transfers
+    upstream: wallet
+    auth: true
+    rate_limit: {requests: 30, window: 1m}
+
+  # Everything under /v1/operations/{id}: read, confirm, cancel.
+  - name: operations-read
+    methods: [GET]
+    path: /v1/operations/
+    upstream: wallet
+    auth: true
+
+  - name: operations-write
+    methods: [POST]
+    path: /v1/operations/
+    upstream: wallet
+    auth: true
+    rate_limit: {requests: 30, window: 1m}

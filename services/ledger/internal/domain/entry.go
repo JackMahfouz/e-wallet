@@ -6,6 +6,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	processmoney "github.com/JackMahfouz/e-wallet/libs/process-money"
 )
 
 var (
@@ -25,7 +27,7 @@ type InsufficientFundsError struct {
 }
 
 func (e *InsufficientFundsError) Error() string {
-	return fmt.Sprintf("insufficient funds: balance %.2f, requested %.2f", FromMinorUnits(e.Balance), FromMinorUnits(e.Requested))
+	return fmt.Sprintf("insufficient funds: balance %.2f, requested %.2f", processmoney.FromMinorUnits(e.Balance), processmoney.FromMinorUnits(e.Requested))
 }
 
 // Direction says whether an entry adds to an account (credit) or takes from it (debit).
